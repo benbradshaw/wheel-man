@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getaway — driving prototype</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:#1a1a18;font-family:system-ui,sans-serif;color:#e5e3db;overflow:hidden}
+#wrap{display:flex;width:100%;height:100vh}
+canvas{display:block;flex:1;min-width:0}
+#panel{width:230px;flex-shrink:0;padding:14px;overflow-y:auto;border-left:1px solid #2d2d2b;background:#111110;font-size:12px}
+#panel h2{font-size:13px;font-weight:500;margin-bottom:12px;color:#e5e3db}
+.sec{margin-bottom:16px}
+.sec-title{font-size:10px;font-weight:500;color:#6b6a64;text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px}
+.row{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;gap:6px}
+.row label{color:#9a9890;font-size:11px;flex:1;white-space:nowrap}
+.row input[type=range]{width:80px;flex-shrink:0;accent-color:#f97316}
+.row span{width:34px;text-align:right;font-size:11px;color:#e5e3db;font-variant-numeric:tabular-nums}
+.stat{display:flex;justify-content:space-between;margin-bottom:4px;font-size:11px}
+.stat .k{color:#6b6a64}
+.stat .v{color:#e5e3db;font-variant-numeric:tabular-nums}
+.bar-wrap{height:5px;background:#2d2d2b;border-radius:3px;overflow:hidden;margin-bottom:8px}
+.bar{height:100%;border-radius:3px;transition:width .1s,background .2s;background:#22c55e}
+kbd{display:inline-block;background:#1f1f1d;border:1px solid #2d2d2b;border-radius:3px;padding:1px 5px;font-size:10px;color:#9a9890}
+.hint{font-size:10px;color:#6b6a64;line-height:1.7;margin-top:4px}
+#msg{font-size:11px;font-weight:500;margin-top:6px;min-height:16px}
+button.reset-btn{width:100%;padding:6px;background:#1f1f1d;border:1px solid #2d2d2b;border-radius:5px;color:#9a9890;font-size:11px;cursor:pointer;margin-top:4px}
+button.reset-btn:hover{background:#2d2d2b;color:#e5e3db}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="panel">
+    <h2>Debug panel</h2>
+    <div class="sec">
+      <div class="sec-title">Physics</div>
+      <div class="row"><label>Traction</label><input type="range" id="s-traction" min="0.05" max="0.98" step="0.01" value="0.88"><span id="v-traction">0.88</span></div>
+      <div class="row"><label>Drift thresh</label><input type="range" id="s-drift" min="0.5" max="6" step="0.1" value="2.5"><span id="v-drift">2.5</span></div>
+      <div class="row"><label>Acceleration</label><input type="range" id="s-accel" min="0.05" max="0.6" step="0.01" value="0.22"><span id="v-accel">0.22</span></div>
+      <div class="row"><label>Max speed</label><input type="range" id="s-maxspd" min="2" max="10" step="0.5" value="5"><span id="v-maxspd">5</span></div>
+      <div class="row"><label>Turn rate</label><input type="range" id="s-turn" min="0.02" max="0.12" step="0.005" value="0.055"><span id="v-turn">0.055</span></div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Damage</div>
+      <div class="row"><label>Exponent</label><input type="range" id="s-dmgexp" min="1" max="4" step="0.1" value="2.2"><span id="v-dmgexp">2.2</span></div>
+      <div class="row"><label>Impact scale</label><input type="range" id="s-impact" min="1" max="20" step="0.5" value="6"><span id="v-impact">6</span></div>
+      <div class="row"><label>Crit threshold</label><input type="range" id="s-crit" min="0.4" max="0.9" step="0.05" value="0.65"><span id="v-crit">0.65</span></div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Camera</div>
+      <div class="row"><label>Lerp factor</label><input type="range" id="s-lerp" min="0.02" max="0.3" step="0.01" value="0.1"><span id="v-lerp">0.1</span></div>
+      <div class="row"><label>Ahead bias</label><input type="range" id="s-ahead" min="0" max="120" step="5" value="60"><span id="v-ahead">60</span></div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Police</div>
+      <div class="row"><label>Speed mult</label><input type="range" id="s-copspd" min="0.3" max="1.4" step="0.05" value="0.72"><span id="v-copspd">0.72</span></div>
+      <div class="row"><label>Chase dist</label><input type="range" id="s-chasedist" min="60" max="400" step="10" value="220"><span id="v-chasedist">220</span></div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Map</div>
+      <div class="row"><label>Tile size</label><input type="range" id="s-tilesize" min="28" max="100" step="2" value="52"><span id="v-tilesize">52</span></div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Live stats</div>
+      <div class="stat"><span class="k">Speed</span><span class="v" id="st-spd">0.0</span></div>
+      <div class="stat"><span class="k">Heading</span><span class="v" id="st-hdg">0°</span></div>
+      <div class="stat"><span class="k">Drift</span><span class="v" id="st-drift">—</span></div>
+      <div class="stat"><span class="k">Damage</span><span class="v" id="st-dmg">0%</span></div>
+      <div class="stat"><span class="k">State</span><span class="v" id="st-state">OK</span></div>
+      <div class="bar-wrap"><div class="bar" id="dmg-bar" style="width:0%"></div></div>
+      <div class="stat"><span class="k">Police</span><span class="v" id="st-cop">idle</span></div>
+      <div id="msg"></div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Controls</div>
+      <div class="hint">
+        <kbd>W</kbd><kbd>S</kbd> accel / brake &nbsp; <kbd>A</kbd><kbd>D</kbd> steer<br>
+        <kbd>R</kbd> reset car &nbsp;&nbsp; Gamepad: L-stick + RT/LT
+      </div>
+      <button class="reset-btn" onclick="resetPlayer()">Reset car (R)</button>
+    </div>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('wrap');
+
+function resize() {
+  canvas.width = wrap.clientWidth - 230;
+  canvas.height = wrap.clientHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// --- sliders ---
+const SL = {};
+document.querySelectorAll('#panel input[type=range]').forEach(el => {
+  const key = el.id.replace('s-', '');
+  SL[key] = parseFloat(el.value);
+  el.addEventListener('input', () => {
+    SL[key] = parseFloat(el.value);
+    document.getElementById('v-' + key).textContent = el.value;
+  });
+});
+
+// --- map ---
+function T() { return SL.tilesize || 52; }
+const COLS = 15, ROWS = 15;
+const MAP_DEF = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+// walls rebuilt each frame — no pre-bake needed
+function getWalls() {
+  const tile = T();
+  const walls = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (MAP_DEF[r][c] === 1) walls.push({ x: c * tile, y: r * tile, w: tile, h: tile });
+    }
+  }
+  return walls;
+}
+
+// goal top-right road intersection, start bottom-left road intersection
+const GOAL_COL = 12, GOAL_ROW = 2;
+const START_COL = 2,  START_ROW = 12;
+function getGoal()  { const tile = T(); return { x: (GOAL_COL + 0.5) * tile, y: (GOAL_ROW + 0.5) * tile, r: 18 }; }
+function getStart() { const tile = T(); return { x: (START_COL + 0.5) * tile, y: (START_ROW + 0.5) * tile }; }
+
+// --- car factory ---
+function makeCar(wx, wy, ang) {
+  return { wx, wy, ang, vx: 0, vy: 0, speed: 0, damage: 0,
+    width: 15, height: 26, smoke: [], iframes: 0, won: false, dead: false };
+}
+
+let player = makeCar(getStart().x, getStart().y, -Math.PI / 2);
+
+const TRAFFIC_PATH_TILES = [
+  [{ x:2,y:2 },{ x:12,y:2 },{ x:12,y:12 },{ x:2,y:12 }],
+  [{ x:7,y:2 },{ x:12,y:7 },{ x:7,y:12 },{ x:2,y:7  }],
+  [{ x:2,y:7 },{ x:12,y:7 }],
+  [{ x:7,y:2 },{ x:7,y:12 }],
+];
+const TRAFFIC_COLORS = ['#2563eb','#16a34a','#d97706','#7c3aed','#0891b2'];
+
+function makeCivilian(pathIdx, color) {
+  const tile = T();
+  const pathTiles = TRAFFIC_PATH_TILES[pathIdx];
+  const startPt = pathTiles[Math.floor(Math.random() * pathTiles.length)];
+  const car = makeCar(startPt.x * tile, startPt.y * tile, 0);
+  car.pathIdx = pathIdx;  // store index, resolve tile coords each frame
+  car.ti = 0;
+  car.color = color;
+  car.isTraffic = true;
+  return car;
+}
+
+const TRAFFIC = [
+  makeCivilian(0, TRAFFIC_COLORS[0]),
+  makeCivilian(1, TRAFFIC_COLORS[1]),
+  makeCivilian(2, TRAFFIC_COLORS[2]),
+  makeCivilian(3, TRAFFIC_COLORS[3]),
+];
+
+// --- police ---
+function makePolice() {
+  const tile = T();
+  const c = makeCar(12 * tile, 12 * tile, Math.PI);
+  c.isCop = true;
+  c.alertTimer = 0;
+  return c;
+}
+const POLICE = [makePolice()];
+
+// --- camera ---
+let camX = 0, camY = 0;
+
+// --- input ---
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === 'r' || e.key === 'R') resetPlayer();
+});
+document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+let gpIndex = null;
+window.addEventListener('gamepadconnected',    e => { gpIndex = e.gamepad.index; });
+window.addEventListener('gamepaddisconnected', e => { gpIndex = null; });
+
+function resetPlayer() {
+  const s = getStart();
+  Object.assign(player, makeCar(s.x, s.y, -Math.PI / 2));
+  document.getElementById('msg').textContent = '';
+}
+
+// --- physics ---
+function getInput() {
+  let fwd = 0, turn = 0;
+  if (keys['w'] || keys['arrowup'])    fwd  =  1;
+  if (keys['s'] || keys['arrowdown'])  fwd  = -0.6;
+  if (keys['a'] || keys['arrowleft'])  turn = -1;
+  if (keys['d'] || keys['arrowright']) turn =  1;
+  if (gpIndex !== null) {
+    const g = navigator.getGamepads()[gpIndex];
+    if (g) {
+      const lx = g.axes[0] || 0;
+      const rt = g.buttons[7] ? g.buttons[7].value : 0;
+      const lt = g.buttons[6] ? g.buttons[6].value : 0;
+      if (Math.abs(lx) > 0.1) turn = lx;
+      fwd = rt - lt * 0.6;
+    }
+  }
+  return { fwd, turn };
+}
+
+function updatePlayer() {
+  if (player.dead || player.won) return;
+  const { fwd, turn } = getInput();
+
+  // damage degrades performance exponentially
+  const dmgFactor  = 1 - Math.pow(player.damage, SL.dmgexp) * 0.72;
+  const maxSpd     = SL.maxspd  * dmgFactor;
+  const accel      = SL.accel   * dmgFactor;
+  const turnRate   = SL.turn    * dmgFactor;
+  const traction   = SL.traction;
+
+  // longitudinal
+  player.speed += fwd * accel;
+  player.speed = Math.max(-maxSpd * 0.5, Math.min(maxSpd, player.speed));
+  player.speed *= 0.965;
+
+  // steer (speed-scaled)
+  const spdAbs = Math.abs(player.speed);
+  if (spdAbs > 0.05) player.ang += turn * turnRate * Math.sign(player.speed);
+
+  // lateral blend (drift model)
+  const tVx = Math.sin(player.ang) * player.speed;
+  const tVy = -Math.cos(player.ang) * player.speed;
+  const grip = traction * (1 - Math.max(0, spdAbs - SL.drift) / (SL.maxspd + 1));
+  player.vx += (tVx - player.vx) * Math.min(1, grip);
+  player.vy += (tVy - player.vy) * Math.min(1, grip);
+
+  player.wx += player.vx;
+  player.wy += player.vy;
+
+  // smoke
+  const driftAmt = Math.hypot(player.vx - tVx, player.vy - tVy);
+  if (driftAmt > 0.5 || player.damage > 0.5) {
+    player.smoke.push({
+      x: player.wx, y: player.wy, life: 1,
+      r: Math.random() * 4 + 2,
+      dx: (Math.random() - 0.5) * 0.4,
+      dy: (Math.random() - 0.5) * 0.4
+    });
+  }
+  player.smoke = player.smoke.filter(s => {
+    s.life -= 0.03; s.x += s.dx; s.y += s.dy; s.r += 0.2;
+    return s.life > 0;
+  });
+
+  if (player.iframes > 0) player.iframes--;
+}
+
+function updateTraffic() {
+  TRAFFIC.forEach(car => {
+    if (car.dead) return;
+    const tile = T();
+    const pathTiles = TRAFFIC_PATH_TILES[car.pathIdx];
+    const ni = (car.ti + 1) % pathTiles.length;
+    const tx = pathTiles[ni].x * tile, ty = pathTiles[ni].y * tile;
+    const dx = tx - car.wx, dy = ty - car.wy;
+    if (Math.hypot(dx, dy) < 8) car.ti = ni;
+    const ang = Math.atan2(dx, dy);
+    const spd = 1.3;
+    car.vx += (Math.sin(ang) * spd - car.vx) * 0.08;
+    car.vy += (-Math.cos(ang) * spd - car.vy) * 0.08;
+    car.ang = Math.atan2(car.vx, -car.vy);
+    car.wx += car.vx;
+    car.wy += car.vy;
+  });
+}
+
+function updatePolice() {
+  POLICE.forEach(cop => {
+    if (cop.dead) return;
+    const dx = player.wx - cop.wx, dy = player.wy - cop.wy;
+    const dist = Math.hypot(dx, dy);
+    cop.alertTimer += dist < SL.chasedist ? 2 : -1;
+    cop.alertTimer = Math.max(0, Math.min(200, cop.alertTimer));
+    if (cop.alertTimer > 60) {
+      const spd = SL.maxspd * SL.copspd;
+      const ang = Math.atan2(dx, dy);
+      cop.vx += (Math.sin(ang) * spd - cop.vx) * 0.09;
+      cop.vy += (-Math.cos(ang) * spd - cop.vy) * 0.09;
+      cop.ang = Math.atan2(cop.vx, -cop.vy);
+    } else {
+      cop.vx *= 0.9;
+      cop.vy *= 0.9;
+    }
+    cop.wx += cop.vx;
+    cop.wy += cop.vy;
+  });
+}
+
+// --- collision ---
+function carCorners(car) {
+  const s = Math.sin(car.ang), c = Math.cos(car.ang);
+  const hw = car.width / 2, hh = car.height / 2;
+  return [
+    { x: car.wx + s * hh - c * hw, y: car.wy - c * hh - s * hw },
+    { x: car.wx - s * hh - c * hw, y: car.wy + c * hh - s * hw },
+    { x: car.wx + s * hh + c * hw, y: car.wy - c * hh + s * hw },
+    { x: car.wx - s * hh + c * hw, y: car.wy + c * hh + s * hw },
+  ];
+}
+
+function resolveWallCollision(car) {
+  const corners = carCorners(car);
+  getWalls().forEach(w => {
+    const hit = corners.some(p =>
+      p.x >= w.x && p.x <= w.x + w.w && p.y >= w.y && p.y <= w.y + w.h
+    );
+    if (!hit) return;
+    const impactSpd = Math.hypot(car.vx, car.vy);
+    const cx = w.x + w.w / 2, cy = w.y + w.h / 2;
+    const dx = car.wx - cx, dy = car.wy - cy;
+    const n = Math.hypot(dx, dy) || 1;
+    car.wx += (dx / n) * 4;
+    car.wy += (dy / n) * 4;
+    car.vx *= -0.35; car.vy *= -0.35;
+    car.speed *= -0.35;
+    if (car === player && car.iframes === 0) {
+      applyDamage(car, impactSpd * SL.impact / 100);
+      car.iframes = 18;
+    }
+  });
+}
+
+function resolveCarCollision(a, b) {
+  const dx = b.wx - a.wx, dy = b.wy - a.wy;
+  const dist = Math.hypot(dx, dy);
+  const minDist = (a.width + b.width) * 0.58;
+  if (dist >= minDist || dist === 0) return;
+  const nx = dx / dist, ny = dy / dist;
+  const overlap = minDist - dist;
+  const impactSpd = Math.hypot(a.vx - b.vx, a.vy - b.vy);
+  a.wx -= nx * overlap * 0.5; a.wy -= ny * overlap * 0.5;
+  b.wx += nx * overlap * 0.5; b.wy += ny * overlap * 0.5;
+  const dot = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+  a.vx -= dot * nx * 0.6; a.vy -= dot * ny * 0.6;
+  b.vx += dot * nx * 0.3; b.vy += dot * ny * 0.3;
+  if (a === player && a.iframes === 0) {
+    applyDamage(a, impactSpd * SL.impact * 0.5 / 100);
+    a.iframes = 20;
+  }
+}
+
+function applyDamage(car, raw) {
+  car.damage = Math.min(1, car.damage + raw);
+  if (car.damage >= 1) car.dead = true;
+}
+
+function checkGoal() {
+  if (player.won || player.dead) return;
+  const goal = getGoal();
+  if (Math.hypot(player.wx - goal.x, player.wy - goal.y) < goal.r + 12) {
+    player.won = true;
+    const msg = document.getElementById('msg');
+    msg.style.color = '#22c55e';
+    msg.textContent = 'Destination reached! Press R to play again.';
+  }
+}
+
+// --- camera ---
+function updateCamera() {
+  const ahead = SL.ahead;
+  const tile = T();
+  const worldW = COLS * tile, worldH = ROWS * tile;
+  const spdNorm = Math.min(1, Math.abs(player.speed) / 2);
+  const tx = player.wx + Math.sin(player.ang) * ahead * spdNorm - canvas.width  / 2;
+  const ty = player.wy - Math.cos(player.ang) * ahead * spdNorm - canvas.height / 2;
+  camX += (tx - camX) * SL.lerp;
+  camY += (ty - camY) * SL.lerp;
+  camX = Math.max(0, Math.min(worldW - canvas.width,  camX));
+  camY = Math.max(0, Math.min(worldH - canvas.height, camY));
+}
+
+// --- draw ---
+const COLORS = {
+  road:     '#2d2d2b',
+  roadLt:   '#d1cfc7',
+  block:    '#1a1a18',
+  blockLt:  '#9a9890',
+  park:     '#1a2e1a',
+  parkLt:   '#6aad6a',
+  water:    '#0a1a2e',
+  waterLt:  '#4a8aad',
+  roadLine: '#3d3d3a',
+  blockStr: '#111',
+};
+// detect dark mode once (could be made reactive)
+const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+function tileColor(t) {
+  if (t === 0) return dark ? COLORS.road  : COLORS.roadLt;
+  if (t === 1) return dark ? COLORS.block : COLORS.blockLt;
+  if (t === 2) return dark ? COLORS.park  : COLORS.parkLt;
+  if (t === 3) return dark ? COLORS.water : COLORS.waterLt;
+  return '#888';
+}
+
+function drawMap() {
+  const tile = T();
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const t = MAP_DEF[r][c];
+      ctx.fillStyle = tileColor(t);
+      ctx.fillRect(c * tile, r * tile, tile, tile);
+      if (t === 1) {
+        ctx.strokeStyle = dark ? COLORS.blockStr : '#888';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(c * tile + 0.5, r * tile + 0.5, tile - 1, tile - 1);
+      }
+      if (t === 0) {
+        ctx.strokeStyle = dark ? COLORS.roadLine : '#b4b0a8';
+        ctx.lineWidth = 0.5;
+        ctx.setLineDash([5, 9]);
+        ctx.beginPath();
+        ctx.moveTo(c * tile + tile / 2, r * tile);
+        ctx.lineTo(c * tile + tile / 2, r * tile + tile);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(c * tile, r * tile + tile / 2);
+        ctx.lineTo(c * tile + tile, r * tile + tile / 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+}
+
+function drawGoal() {
+  const goal = getGoal();
+  const pulse = 0.75 + 0.25 * Math.sin(Date.now() / 300);
+  ctx.save();
+  ctx.translate(goal.x, goal.y);
+  ctx.beginPath(); ctx.arc(0, 0, goal.r * pulse, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(34,197,94,0.2)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, goal.r, 0, Math.PI * 2);
+  ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#22c55e';
+  ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('GOAL', 0, 0);
+  ctx.restore();
+}
+
+function drawStartMarker() {
+  const start = getStart();
+  ctx.save();
+  ctx.translate(start.x, start.y);
+  ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(251,191,36,0.12)'; ctx.fill();
+  ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = 'bold 8px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('START', 0, 0);
+  ctx.restore();
+}
+
+function drawSmoke(car) {
+  car.smoke.forEach(s => {
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(140,140,130,${s.life * 0.4})`; ctx.fill();
+  });
+}
+
+function drawCar(car, color) {
+  ctx.save();
+  ctx.translate(car.wx, car.wy);
+  ctx.rotate(car.ang);
+  // shadow
+  ctx.beginPath(); ctx.ellipse(0, 3, car.width / 2, car.height / 4.5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fill();
+  // body
+  ctx.fillStyle = car.dead ? '#4b4b49' : color;
+  const w = car.width, h = car.height;
+  ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 3); ctx.fill();
+  // windscreen
+  ctx.fillStyle = 'rgba(160,220,255,0.5)';
+  ctx.fillRect(-w/2 + 2, -h/2 + 3, w - 4, h * 0.28);
+  // wheels
+  ctx.fillStyle = '#111';
+  [[-w/2-1, -h/2+2],[w/2-2, -h/2+2],[-w/2-1, h/2-6],[w/2-2, h/2-6]].forEach(([wx, wy]) => {
+    ctx.fillRect(wx, wy, 3, 6);
+  });
+  // damage tint
+  if (car.damage > 0.25) {
+    ctx.fillStyle = `rgba(220,50,30,${Math.pow(car.damage, 2) * 0.55})`;
+    ctx.beginPath(); ctx.roundRect(-w/2, -h/2, w, h, 3); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawCop(cop) {
+  ctx.save();
+  ctx.translate(cop.wx, cop.wy);
+  ctx.rotate(cop.ang);
+  // shadow
+  ctx.beginPath(); ctx.ellipse(0, 3, cop.width/2, cop.height/4.5, 0, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fill();
+  // body
+  ctx.fillStyle = '#1d4ed8';
+  ctx.beginPath(); ctx.roundRect(-cop.width/2, -cop.height/2, cop.width, cop.height, 3); ctx.fill();
+  // windscreen
+  ctx.fillStyle = 'rgba(160,220,255,0.5)';
+  ctx.fillRect(-cop.width/2+2, -cop.height/2+3, cop.width-4, cop.height*0.28);
+  // lightbar
+  const t = Date.now();
+  ctx.fillStyle = (t % 500 < 250) ? '#ef4444' : '#3b82f6';
+  ctx.fillRect(-5, -cop.height/2 - 4, 5, 3);
+  ctx.fillStyle = (t % 500 < 250) ? '#3b82f6' : '#ef4444';
+  ctx.fillRect(0, -cop.height/2 - 4, 5, 3);
+  // wheels
+  ctx.fillStyle = '#111';
+  [[-cop.width/2-1, -cop.height/2+2],[cop.width/2-2, -cop.height/2+2],
+   [-cop.width/2-1, cop.height/2-6],[cop.width/2-2, cop.height/2-6]].forEach(([wx, wy]) => {
+    ctx.fillRect(wx, wy, 3, 6);
+  });
+  ctx.restore();
+}
+
+function drawMinimap() {
+  const S = 4;
+  const tile = T();
+  const mw = COLS * S, mh = ROWS * S;
+  const mx = 10, my = canvas.height - mh - 10;
+  ctx.fillStyle = 'rgba(10,10,9,0.82)';
+  ctx.fillRect(mx - 2, my - 2, mw + 4, mh + 4);
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const t = MAP_DEF[r][c];
+      ctx.fillStyle = t===0?'#3d3d3b':t===2?'#1a3a1a':t===3?'#0a1a2e':'#111';
+      ctx.fillRect(mx + c * S, my + r * S, S, S);
+    }
+  }
+  // goal
+  const goal = getGoal();
+  ctx.fillStyle = '#22c55e';
+  ctx.beginPath(); ctx.arc(mx + goal.x/tile*S, my + goal.y/tile*S, 2.5, 0, Math.PI*2); ctx.fill();
+  // police
+  ctx.fillStyle = '#3b82f6';
+  POLICE.forEach(cop => {
+    ctx.beginPath(); ctx.arc(mx + cop.wx/tile*S, my + cop.wy/tile*S, 2, 0, Math.PI*2); ctx.fill();
+  });
+  // player
+  ctx.fillStyle = '#f97316';
+  ctx.beginPath(); ctx.arc(mx + player.wx/tile*S, my + player.wy/tile*S, 2.5, 0, Math.PI*2); ctx.fill();
+}
+
+function updateStats() {
+  const spd     = Math.hypot(player.vx, player.vy);
+  const hdg     = (((player.ang * 180 / Math.PI) % 360) + 360) % 360;
+  const tVx     = Math.sin(player.ang) * player.speed;
+  const tVy     = -Math.cos(player.ang) * player.speed;
+  const drift   = Math.hypot(player.vx - tVx, player.vy - tVy);
+  const dmgPct  = Math.round(player.damage * 100);
+  const state   = player.dead ? 'WRECKED' : player.won ? 'WIN' :
+                  player.damage > SL.crit ? 'CRITICAL' : player.damage > 0.3 ? 'Damaged' : 'OK';
+
+  document.getElementById('st-spd').textContent  = spd.toFixed(1);
+  document.getElementById('st-hdg').textContent  = hdg.toFixed(0) + '°';
+  document.getElementById('st-drift').textContent = drift > 0.3 ? drift.toFixed(2) : '—';
+  document.getElementById('st-dmg').textContent  = dmgPct + '%';
+  document.getElementById('st-state').textContent = state;
+
+  const bar = document.getElementById('dmg-bar');
+  bar.style.width = dmgPct + '%';
+  bar.style.background = player.damage > SL.crit ? '#ef4444' : player.damage > 0.3 ? '#f59e0b' : '#22c55e';
+
+  document.getElementById('st-cop').textContent = POLICE[0].alertTimer > 60 ? 'CHASING' : 'idle';
+
+  if (player.dead && !player.won) {
+    const msg = document.getElementById('msg');
+    msg.style.color = '#ef4444';
+    msg.textContent = 'Wrecked. Press R to reset.';
+  }
+}
+
+// --- loop ---
+function loop() {
+  requestAnimationFrame(loop);
+
+  updatePlayer();
+  updateTraffic();
+  updatePolice();
+
+  resolveWallCollision(player);
+  TRAFFIC.forEach(t => { resolveWallCollision(t); resolveCarCollision(player, t); });
+  POLICE.forEach(c  => { resolveWallCollision(c); resolveCarCollision(player, c); });
+
+  checkGoal();
+  updateCamera();
+  updateStats();
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(-camX, -camY);
+
+  drawMap();
+  drawStartMarker();
+  drawGoal();
+  drawSmoke(player);
+  TRAFFIC.forEach(t => drawSmoke(t));
+  TRAFFIC.forEach(t => drawCar(t, t.color));
+  POLICE.forEach(c  => drawCop(c));
+  drawCar(player, player.dead ? '#4b4b49' : '#f97316');
+
+  ctx.restore();
+  drawMinimap();
+}
+
+loop();
+</script>
+</body>
+</html>
