@@ -12,5 +12,5 @@ export const START_COLOR = '#00cc44';
 export const END_COLOR = '#cc2200';
 export const HOVER_COLOR = 'rgba(255,255,255,0.18)';
 
-export const BAND_1 = 8;
-export const BAND_2 = 14;
+export const BAND_1 = 16;
+export const BAND_2 = 18;

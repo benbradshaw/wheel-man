@@ -17,7 +17,7 @@ export function exportGodotTilemap(grid: GridState, markers: Marker[]): void {
     version: 'godot4',
     cols: COLS,
     rows: ROWS,
-    tile_size: 64,
+    tile_size: 80,
     tiles,
     markers: markers.map(m => ({ type: m.type, col: m.c, row: m.r })),
   };
