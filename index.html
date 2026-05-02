@@ -60,6 +60,7 @@ button.reset-btn:hover{background:#2d2d2b;color:#e5e3db}
     <div class="sec">
       <div class="sec-title">Map</div>
       <div class="row"><label>Tile size</label><input type="range" id="s-tilesize" min="28" max="100" step="2" value="52"><span id="v-tilesize">52</span></div>
+      <div class="row"><label>Load map.json</label><input type="file" id="s-mapfile" accept=".json" style="width:80px;font-size:10px;color:#9a9890"></div>
     </div>
     <div class="sec">
       <div class="sec-title">Live stats</div>
@@ -107,13 +108,24 @@ document.querySelectorAll('#panel input[type=range]').forEach(el => {
   });
 });
 
+document.getElementById('s-mapfile').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try { loadMapJSON(JSON.parse(ev.target.result)); }
+    catch (err) { console.warn('Failed to load map.json', err); }
+  };
+  reader.readAsText(file);
+});
+
 // --- map ---
 function T() { return SL.tilesize || 52; }
-const COLS = 60, ROWS = 60;
+let COLS = 60, ROWS = 60;
 
 // 0 = road, 1 = block/grass
 // 60×60 grid: outer ring 10 tiles, central cross 8 tiles, blocks 16×16 tiles each (2× previous)
-const MAP_DEF = (() => {
+let MAP_DEF = (() => {
   const g = Array.from({length:ROWS}, () => new Array(COLS).fill(1));
   const road = (r1,c1,r2,c2) => { for(let r=r1;r<=r2;r++) for(let c=c1;c<=c2;c++) g[r][c]=0; };
   // Outer ring (10 tiles wide each side)
@@ -123,6 +135,62 @@ const MAP_DEF = (() => {
   road(0,26,59,33); road(26,0,33,59);
   return g;
 })();
+
+// sparse tile metadata from city-map-builder export: key = r*COLS+c → {type, lanes}
+let TILE_MAP = new Map();
+
+// direction table — valid exits per tile type
+function getTileExits(tileType) {
+  switch(tileType) {
+    case 'H':   return [[0,1],[0,-1]];
+    case 'V':   return [[1,0],[-1,0]];
+    case 'NE':  return [[-1,0],[0,1]];
+    case 'NW':  return [[-1,0],[0,-1]];
+    case 'SE':  return [[1,0],[0,1]];
+    case 'SW':  return [[1,0],[0,-1]];
+    case 'T-N': return [[-1,0],[0,1],[0,-1]];
+    case 'T-S': return [[1,0],[0,1],[0,-1]];
+    case 'T-E': return [[-1,0],[1,0],[0,1]];
+    case 'T-W': return [[-1,0],[1,0],[0,-1]];
+    case 'X':   return [[-1,0],[1,0],[0,1],[0,-1]];
+    case 'dN':  return [[-1,0]];
+    case 'dS':  return [[1,0]];
+    case 'dE':  return [[0,1]];
+    case 'dW':  return [[0,-1]];
+    default:    return [];
+  }
+}
+
+// right-hand traffic perpendicular offset (tile fractions) for a given travel direction
+function getLaneOffset(dr, dc, lanes) {
+  if (lanes <= 1) return { ox: 0, oy: 0 };
+  const q = 0.25;
+  if (dc > 0) return { ox: 0, oy: +q };  // east  → south lane
+  if (dc < 0) return { ox: 0, oy: -q };  // west  → north lane
+  if (dr > 0) return { ox: -q, oy: 0 };  // south → west lane
+  if (dr < 0) return { ox: +q, oy: 0 };  // north → east lane
+  return { ox: 0, oy: 0 };
+}
+
+// load a city-map-builder map.json and rebuild the world
+function loadMapJSON(json) {
+  COLS = json.cols;
+  ROWS = json.rows;
+  MAP_DEF = Array.from({ length: ROWS }, () => new Array(COLS).fill(1));
+  TILE_MAP = new Map();
+  json.tiles.forEach(({ col, row, lanes, type }) => {
+    MAP_DEF[row][col] = 0;
+    TILE_MAP.set(row * COLS + col, { type, lanes });
+  });
+  const startM = json.markers ? json.markers.find(m => m.type === 'start') : null;
+  const endM   = json.markers ? json.markers.find(m => m.type === 'end')   : null;
+  if (startM) { START_COL = startM.col; START_ROW = startM.row; }
+  if (endM)   { GOAL_COL  = endM.col;  GOAL_ROW  = endM.row;  }
+  mapCanvas = null;   // force drawMap() to rebuild offscreen cache
+  buildWalls();
+  spawnTraffic();
+  resetPlayer();
+}
 
 // walls rebuilt each frame — no pre-bake needed
 function getWalls() {
@@ -137,8 +205,8 @@ function getWalls() {
 }
 
 // goal = top-right, start = bottom-left
-const GOAL_COL = 55, GOAL_ROW = 4;
-const START_COL = 55, START_ROW = 55;
+let GOAL_COL = 55, GOAL_ROW = 4;
+let START_COL = 55, START_ROW = 55;
 function getGoal()  { const tile = T(); return { x: (GOAL_COL + 0.5) * tile, y: (GOAL_ROW + 0.5) * tile, r: 18 }; }
 function getStart() { const tile = T(); return { x: (START_COL + 0.5) * tile, y: (START_ROW + 0.5) * tile }; }
 
@@ -627,6 +695,55 @@ function tileColor(t) {
 
 let mapCanvas = null, mapCacheTile = -1;
 
+// Simple render for city-map-builder maps (no footpath classification needed)
+function drawMapSimple(mc, tile) {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      mc.fillStyle = MAP_DEF[r][c] === 0 ? '#4d4d4d' : '#5c9e32';
+      mc.fillRect(c * tile, r * tile, tile, tile);
+    }
+  }
+  // grass texture
+  function th(r, c, s) {
+    let n = (Math.imul(r*1619 + c*31337 + s*7919, 0x9e3779b9)|0);
+    n ^= n >>> 13; n = (Math.imul(n, 0x5851f42d)|0); n ^= n >>> 15;
+    return ((n >>> 0) & 0xffff) / 0xffff;
+  }
+  const GRASS_COLS = ['#2a6016','#3b8a1c','#5aab24','#88c23a','#aad462'];
+  const dotSz = Math.max(2, Math.min(4, ((tile / 7)|0) * 2));
+  if (tile >= 6) {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (MAP_DEF[r][c] === 0) continue;
+        const x = c * tile, y = r * tile;
+        const count = 3 + ((th(r,c,99)*4)|0);
+        for (let i = 0; i < count; i++) {
+          const fx = th(r,c,i) * (tile - dotSz - 1);
+          const fy = th(r,c,i+50) * (tile - dotSz - 1);
+          mc.fillStyle = GRASS_COLS[(th(r,c,i+150) * GRASS_COLS.length)|0];
+          mc.fillRect(x + (Math.round(fx/2)*2), y + (Math.round(fy/2)*2), dotSz, dotSz);
+        }
+      }
+    }
+  }
+  // road edge lines between road and grass
+  mc.save();
+  mc.strokeStyle = '#333';
+  mc.lineWidth = Math.max(1, tile * 0.04);
+  mc.lineCap = 'square';
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (MAP_DEF[r][c] !== 0) continue;
+      const x = c * tile, y = r * tile;
+      if (r > 0      && MAP_DEF[r-1][c] !== 0) { mc.beginPath(); mc.moveTo(x,y);        mc.lineTo(x+tile,y);        mc.stroke(); }
+      if (r < ROWS-1 && MAP_DEF[r+1][c] !== 0) { mc.beginPath(); mc.moveTo(x,y+tile);   mc.lineTo(x+tile,y+tile);   mc.stroke(); }
+      if (c > 0      && MAP_DEF[r][c-1] !== 0) { mc.beginPath(); mc.moveTo(x,y);        mc.lineTo(x,y+tile);        mc.stroke(); }
+      if (c < COLS-1 && MAP_DEF[r][c+1] !== 0) { mc.beginPath(); mc.moveTo(x+tile,y);   mc.lineTo(x+tile,y+tile);   mc.stroke(); }
+    }
+  }
+  mc.restore();
+}
+
 function drawMap() {
   const tile = T();
   if (mapCanvas && mapCacheTile === tile) { ctx.drawImage(mapCanvas, 0, 0); return; }
@@ -638,6 +755,12 @@ function drawMap() {
   const mc = mapCanvas.getContext('2d');
   mc.imageSmoothingEnabled = false;
   mapCacheTile = tile;
+
+  if (TILE_MAP.size > 0) {
+    drawMapSimple(mc, tile);
+    ctx.drawImage(mapCanvas, 0, 0);
+    return;
+  }
 
   const N = ROWS * COLS;
   function isRoad(r, c) { return r>=0&&r<ROWS&&c>=0&&c<COLS&&MAP_DEF[r][c]===0; }
@@ -1340,11 +1463,21 @@ function paintDecal({ isFront, isSide, isBack, sideRight, isHigh, isMed }) {
 
 // --- traffic car AI ---
 function pickTrafficDir(r, c, dr, dc) {
-  // Always continue straight — U-turn only when road ends.
-  // Cars never turn onto perpendicular roads; they bounce back and forth
-  // on their assigned strip and computeLane() switches them to the correct
-  // opposite lane on each U-turn.
   if (isAsphaltTile(r + dr, c + dc)) return [dr, dc];
+  return [-dr, -dc];
+}
+
+function pickTileTrafficDir(r, c, dr, dc) {
+  const tile = TILE_MAP.get(r * COLS + c);
+  if (!tile) return pickTrafficDir(r, c, dr, dc);
+  const exits = getTileExits(tile.type);
+  if (exits.length === 0) return [-dr, -dc];
+  // exclude came-from direction
+  const options = exits.filter(([edr, edc]) => !(edr === -dr && edc === -dc));
+  // prefer straight
+  const straight = options.find(([edr, edc]) => edr === dr && edc === dc);
+  if (straight) return straight;
+  if (options.length > 0) return options[Math.floor(Math.random() * options.length)];
   return [-dr, -dc];
 }
 
@@ -1367,11 +1500,46 @@ function makeTrafficCar(r, c, dr, dc, laneR, laneC) {
   };
 }
 
+function makeTrafficCarTile(r, c, dr, dc) {
+  const tile = T();
+  const tileInfo = TILE_MAP.get(r * COLS + c);
+  const lanes = tileInfo ? tileInfo.lanes : 1;
+  const lo = getLaneOffset(dr, dc, lanes);
+  return {
+    wx: (c + 0.5 + lo.ox) * tile, wy: (r + 0.5 + lo.oy) * tile,
+    ang: Math.atan2(dc, -dr),
+    vx: 0, vy: 0,
+    damage: 0, dead: false,
+    width: 67, height: 112,
+    smoke: [],
+    lastHitTime: 0,
+    isTraffic: true,
+    useTileNav: true,
+    tileR: r, tileC: c,
+    dr, dc,
+    laneOx: lo.ox, laneOy: lo.oy,
+    knockVx: 0, knockVy: 0,
+  };
+}
+
 function spawnTraffic() {
   trafficCars.length = 0;
-  TRAFFIC_SPAWN_POSITIONS.forEach(({ r, c, dr, dc, laneR, laneC }) => {
-    trafficCars.push(makeTrafficCar(r, c, dr, dc, laneR, laneC));
-  });
+  if (TILE_MAP.size > 0) {
+    TILE_MAP.forEach(({ type }, key) => {
+      const r = (key / COLS) | 0, c = key % COLS;
+      let dr = 0, dc = 0;
+      if      (type === 'dN') { dr =  1; dc =  0; }
+      else if (type === 'dS') { dr = -1; dc =  0; }
+      else if (type === 'dE') { dr =  0; dc = -1; }
+      else if (type === 'dW') { dr =  0; dc =  1; }
+      else return;
+      trafficCars.push(makeTrafficCarTile(r, c, dr, dc));
+    });
+  } else {
+    TRAFFIC_SPAWN_POSITIONS.forEach(({ r, c, dr, dc, laneR, laneC }) => {
+      trafficCars.push(makeTrafficCar(r, c, dr, dc, laneR, laneC));
+    });
+  }
 }
 
 function updateTrafficCars() {
@@ -1379,55 +1547,91 @@ function updateTrafficCars() {
   trafficCars.forEach(t => {
     if (t.dead) return;
 
-    const isHoriz = t.dc !== 0;
+    if (t.useTileNav) {
+      // --- tile-aware navigation (city-map-builder maps) ---
+      const targetX = (t.tileC + 0.5 + t.laneOx) * tile;
+      const targetY = (t.tileR + 0.5 + t.laneOy) * tile;
+      const travelDist = t.dc !== 0
+        ? Math.abs(t.wx - targetX)
+        : Math.abs(t.wy - targetY);
 
-    // Travel axis advances tile-by-tile; lane axis holds a fixed row or col.
-    const targetX = isHoriz ? (t.tileC + 0.5) * tile : (t.laneC + 0.5) * tile;
-    const targetY = isHoriz ? (t.laneR + 0.5) * tile : (t.tileR + 0.5) * tile;
-
-    // Advance to next tile when close enough on the travel axis
-    const travelDist = isHoriz
-      ? Math.abs(t.wx - (t.tileC + 0.5) * tile)
-      : Math.abs(t.wy - (t.tileR + 0.5) * tile);
-
-    if (travelDist < tile * 0.45) {
-      t.tileR += t.dr;
-      t.tileC += t.dc;
-      const [ndr, ndc] = pickTrafficDir(t.tileR, t.tileC, t.dr, t.dc);
-      if (ndr !== t.dr || ndc !== t.dc) {
-        // Direction changed (U-turn) — assign correct lane for the new direction
-        if (ndc !== 0) t.laneR = computeLane(t.tileR, t.tileC, ndr, ndc);
-        if (ndr !== 0) t.laneC = computeLane(t.tileR, t.tileC, ndr, ndc);
+      if (travelDist < tile * 0.45) {
+        t.tileR += t.dr;
+        t.tileC += t.dc;
+        const [ndr, ndc] = pickTileTrafficDir(t.tileR, t.tileC, t.dr, t.dc);
+        if (ndr !== t.dr || ndc !== t.dc) {
+          const info = TILE_MAP.get(t.tileR * COLS + t.tileC);
+          const lanes = info ? info.lanes : 1;
+          const lo = getLaneOffset(ndr, ndc, lanes);
+          t.laneOx = lo.ox; t.laneOy = lo.oy;
+        }
+        t.dr = ndr; t.dc = ndc;
       }
-      t.dr = ndr; t.dc = ndc;
-    }
 
-    // Steer toward lane-corrected target
-    const dx = targetX - t.wx, dy = targetY - t.wy;
-    const desiredAng = Math.atan2(dx, -dy);
-    let da = desiredAng - t.ang;
-    while (da >  Math.PI) da -= Math.PI * 2;
-    while (da < -Math.PI) da += Math.PI * 2;
-    t.ang += da * 0.20;
+      const dx = targetX - t.wx, dy = targetY - t.wy;
+      const desiredAng = Math.atan2(dx, -dy);
+      let da = desiredAng - t.ang;
+      while (da >  Math.PI) da -= Math.PI * 2;
+      while (da < -Math.PI) da += Math.PI * 2;
+      t.ang += da * 0.20;
 
-    t.wx += Math.sin(t.ang) * TRAFFIC_SPEED;
-    t.wy -= Math.cos(t.ang) * TRAFFIC_SPEED;
+      t.wx += Math.sin(t.ang) * TRAFFIC_SPEED;
+      t.wy -= Math.cos(t.ang) * TRAFFIC_SPEED;
 
-    // Apply knock impulse — only if destination stays on asphalt
-    if (t.knockVx !== 0 || t.knockVy !== 0) {
-      const nx = t.wx + t.knockVx, ny = t.wy + t.knockVy;
-      if (isAsphaltTile((ny / tile) | 0, (nx / tile) | 0)) {
-        t.wx = nx; t.wy = ny;
+      if (t.knockVx !== 0 || t.knockVy !== 0) {
+        const nx = t.wx + t.knockVx, ny = t.wy + t.knockVy;
+        if (isRoadTile((ny / tile) | 0, (nx / tile) | 0)) { t.wx = nx; t.wy = ny; }
+        t.knockVx *= 0.84; t.knockVy *= 0.84;
+        if (Math.hypot(t.knockVx, t.knockVy) < 0.3) { t.knockVx = 0; t.knockVy = 0; }
       }
-      t.knockVx *= 0.84; t.knockVy *= 0.84;
-      if (Math.hypot(t.knockVx, t.knockVy) < 0.3) { t.knockVx = 0; t.knockVy = 0; }
-    }
 
-    // Hard clamp: if car drifted off asphalt, snap perpendicular axis back to lane
-    if (!isAsphaltTile((t.wy / tile) | 0, (t.wx / tile) | 0)) {
-      if (isHoriz) t.wy = (t.laneR + 0.5) * tile;
-      else         t.wx = (t.laneC + 0.5) * tile;
-      t.knockVx = 0; t.knockVy = 0;
+      if (!isRoadTile((t.wy / tile) | 0, (t.wx / tile) | 0)) {
+        if (t.dc !== 0) t.wy = (t.tileR + 0.5 + t.laneOy) * tile;
+        else            t.wx = (t.tileC + 0.5 + t.laneOx) * tile;
+        t.knockVx = 0; t.knockVy = 0;
+      }
+    } else {
+      // --- legacy navigation (default hardcoded map) ---
+      const isHoriz = t.dc !== 0;
+      const targetX = isHoriz ? (t.tileC + 0.5) * tile : (t.laneC + 0.5) * tile;
+      const targetY = isHoriz ? (t.laneR + 0.5) * tile : (t.tileR + 0.5) * tile;
+      const travelDist = isHoriz
+        ? Math.abs(t.wx - (t.tileC + 0.5) * tile)
+        : Math.abs(t.wy - (t.tileR + 0.5) * tile);
+
+      if (travelDist < tile * 0.45) {
+        t.tileR += t.dr;
+        t.tileC += t.dc;
+        const [ndr, ndc] = pickTrafficDir(t.tileR, t.tileC, t.dr, t.dc);
+        if (ndr !== t.dr || ndc !== t.dc) {
+          if (ndc !== 0) t.laneR = computeLane(t.tileR, t.tileC, ndr, ndc);
+          if (ndr !== 0) t.laneC = computeLane(t.tileR, t.tileC, ndr, ndc);
+        }
+        t.dr = ndr; t.dc = ndc;
+      }
+
+      const dx = targetX - t.wx, dy = targetY - t.wy;
+      const desiredAng = Math.atan2(dx, -dy);
+      let da = desiredAng - t.ang;
+      while (da >  Math.PI) da -= Math.PI * 2;
+      while (da < -Math.PI) da += Math.PI * 2;
+      t.ang += da * 0.20;
+
+      t.wx += Math.sin(t.ang) * TRAFFIC_SPEED;
+      t.wy -= Math.cos(t.ang) * TRAFFIC_SPEED;
+
+      if (t.knockVx !== 0 || t.knockVy !== 0) {
+        const nx = t.wx + t.knockVx, ny = t.wy + t.knockVy;
+        if (isAsphaltTile((ny / tile) | 0, (nx / tile) | 0)) { t.wx = nx; t.wy = ny; }
+        t.knockVx *= 0.84; t.knockVy *= 0.84;
+        if (Math.hypot(t.knockVx, t.knockVy) < 0.3) { t.knockVx = 0; t.knockVy = 0; }
+      }
+
+      if (!isAsphaltTile((t.wy / tile) | 0, (t.wx / tile) | 0)) {
+        if (isHoriz) t.wy = (t.laneR + 0.5) * tile;
+        else         t.wx = (t.laneC + 0.5) * tile;
+        t.knockVx = 0; t.knockVy = 0;
+      }
     }
 
     t.vx = Math.sin(t.ang) * TRAFFIC_SPEED * 60;
@@ -1649,8 +1853,13 @@ function drawMinimap() {
   ctx.fillRect(mx - 2, my - 2, mw + 4, mh + 4);
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      const t = MAP_DEF[r][c];
-      ctx.fillStyle = t===0?'#4d4d4d':'#2d6a18';
+      const isRoad = MAP_DEF[r][c] === 0;
+      if (TILE_MAP.size > 0 && isRoad) {
+        const info = TILE_MAP.get(r * COLS + c);
+        ctx.fillStyle = info ? (info.lanes >= 2 ? '#888' : '#5d5d5d') : '#4d4d4d';
+      } else {
+        ctx.fillStyle = isRoad ? '#4d4d4d' : '#2d6a18';
+      }
       ctx.fillRect(mx + c * S, my + r * S, S, S);
     }
   }
